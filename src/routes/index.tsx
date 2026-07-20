@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { Client } from "@gradio/client";
 import {
   UploadCloud,
   Play,
@@ -12,17 +13,65 @@ import {
   RotateCcw,
   Sparkles,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   component: Index,
 });
 
+// Paste your live Colab / Space Gradio URL here.
+// e.g. "https://12acae18d28239bfc3.gradio.live"
+const GRADIO_ENDPOINT = "https://YOUR_TEMPORARY_HASH.gradio.live";
+
 function formatTime(sec: number) {
   if (!isFinite(sec) || sec < 0) sec = 0;
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// Calls the Gradio `separate` endpoint with the uploaded file and
+// returns object URLs for the vocals and instrumental MP3 blobs.
+async function separateAudio(
+  file: File
+): Promise<{ vocalsUrl: string; instrumentalUrl: string }> {
+  const client = await Client.connect(GRADIO_ENDPOINT);
+
+  const result = await client.predict("/separate", {
+    audio_file: file,
+  });
+
+  // result.data is an array matching the Gradio outputs:
+  // [vocals_file, instrumental_file]
+  const [vocalsData, instrumentalData] = result.data as any[];
+
+  const toUrl = async (entry: any): Promise<string> => {
+    // Gradio File outputs typically resolve to an object with a `url`
+    // (hosted on the Space/Colab tunnel) or a `path`. Fetch it and
+    // convert to a local blob URL so WaveSurfer can play it directly.
+    const remoteUrl: string | undefined = entry?.url ?? entry?.path;
+    if (!remoteUrl) {
+      throw new Error("Unexpected response shape from separation endpoint.");
+    }
+    const resolvedUrl = remoteUrl.startsWith("http")
+      ? remoteUrl
+      : `${GRADIO_ENDPOINT.replace(/\/$/, "")}/file=${remoteUrl}`;
+
+    const res = await fetch(resolvedUrl);
+    if (!res.ok) {
+      throw new Error(`Failed to download separated stem (${res.status})`);
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  };
+
+  const [vocalsUrl, instrumentalUrl] = await Promise.all([
+    toUrl(vocalsData),
+    toUrl(instrumentalData),
+  ]);
+
+  return { vocalsUrl, instrumentalUrl };
 }
 
 function StemTrack({
@@ -163,9 +212,12 @@ function StemTrack({
 }
 
 function Index() {
-  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [originalUrl, setOriginalUrl] = useState<string | null>(null);
+  const [vocalsUrl, setVocalsUrl] = useState<string | null>(null);
+  const [instrumentalUrl, setInstrumentalUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [separating, setSeparating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -175,16 +227,35 @@ function Index() {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleFile = useCallback((f: File) => {
+  const handleFile = useCallback(async (f: File) => {
     if (!f.type.startsWith("audio/")) return;
+
     setPlaying(false);
+    setError(null);
     setSeparating(true);
     setFileName(f.name);
-    const url = URL.createObjectURL(f);
-    window.setTimeout(() => {
-      setFileUrl(url);
+    setVocalsUrl(null);
+    setInstrumentalUrl(null);
+
+    // Keep a local preview URL in case separation fails, so the user
+    // still sees what they uploaded.
+    const localPreview = URL.createObjectURL(f);
+    setOriginalUrl(localPreview);
+
+    try {
+      const { vocalsUrl: vUrl, instrumentalUrl: iUrl } = await separateAudio(f);
+      setVocalsUrl(vUrl);
+      setInstrumentalUrl(iUrl);
+    } catch (err) {
+      console.error("Separation failed:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong while separating this track. Please try again."
+      );
+    } finally {
       setSeparating(false);
-    }, 900);
+    }
   }, []);
 
   const onDrop = (e: React.DragEvent) => {
@@ -196,10 +267,13 @@ function Index() {
 
   const reset = () => {
     setPlaying(false);
-    setFileUrl(null);
+    setOriginalUrl(null);
+    setVocalsUrl(null);
+    setInstrumentalUrl(null);
     setFileName("");
     setCurrent(0);
     setDuration(0);
+    setError(null);
   };
 
   const onScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -210,9 +284,15 @@ function Index() {
   };
 
   useEffect(() => {
-    if (!fileUrl) return;
-    return () => URL.revokeObjectURL(fileUrl);
-  }, [fileUrl]);
+    return () => {
+      if (originalUrl) URL.revokeObjectURL(originalUrl);
+      if (vocalsUrl) URL.revokeObjectURL(vocalsUrl);
+      if (instrumentalUrl) URL.revokeObjectURL(instrumentalUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [originalUrl, vocalsUrl, instrumentalUrl]);
+
+  const hasStems = !!vocalsUrl && !!instrumentalUrl;
 
   return (
     <main
@@ -230,7 +310,7 @@ function Index() {
               <div className="text-xs text-muted-foreground">AI stem separation</div>
             </div>
           </div>
-          {fileUrl && (
+          {originalUrl && (
             <button
               onClick={reset}
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
@@ -240,7 +320,7 @@ function Index() {
           )}
         </header>
 
-        {!fileUrl && (
+        {!originalUrl && (
           <section className="text-center mb-10">
             <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">
               Split any song into{" "}
@@ -248,13 +328,13 @@ function Index() {
               <span style={{ color: "var(--instrumentals)" }}>instrumentals</span>
             </h1>
             <p className="mt-4 text-muted-foreground max-w-xl mx-auto">
-              Drop a track below. We'll separate it in seconds — then mix the two stems
+              Drop a track below. We'll separate it with AI — then mix the two stems
               live with simple volume sliders.
             </p>
           </section>
         )}
 
-        {!fileUrl ? (
+        {!originalUrl ? (
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -281,17 +361,11 @@ function Index() {
               }}
             />
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/15 text-primary transition-transform group-hover:scale-105">
-              {separating ? (
-                <Loader2 className="animate-spin" size={28} />
-              ) : (
-                <UploadCloud size={28} />
-              )}
+              <UploadCloud size={28} />
             </div>
-            <div className="mt-6 text-lg font-medium">
-              {separating ? "Analyzing your song…" : "Drop a song here"}
-            </div>
+            <div className="mt-6 text-lg font-medium">Drop a song here</div>
             <div className="mt-1 text-sm text-muted-foreground">
-              {separating ? fileName : "or click to browse — MP3, WAV, FLAC up to 50MB"}
+              or click to browse — MP3, WAV, FLAC up to 50MB
             </div>
           </div>
         ) : (
@@ -300,70 +374,109 @@ function Index() {
               <div className="flex items-center justify-between gap-4 mb-4">
                 <div className="min-w-0">
                   <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                    Now playing
+                    {separating ? "Processing" : "Now playing"}
                   </div>
                   <div className="mt-0.5 truncate text-base font-medium">{fileName}</div>
                 </div>
                 <button
                   onClick={() => setPlaying((p) => !p)}
-                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 active:scale-95"
-                  style={{ boxShadow: "var(--shadow-glow)" }}
+                  disabled={!hasStems}
+                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
+                  style={{ boxShadow: hasStems ? "var(--shadow-glow)" : undefined }}
                   aria-label={playing ? "Pause" : "Play"}
                 >
                   {playing ? <Pause size={22} /> : <Play size={22} className="ml-0.5" />}
                 </button>
               </div>
-              <div className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
-                <span>{formatTime(current)}</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 0}
-                  step={0.01}
-                  value={current}
-                  onChange={onScrub}
-                  className="stem-slider flex-1"
-                  style={
-                    {
-                      ["--stem-color" as string]: "var(--primary)",
-                      ["--stem-fill" as string]: `${
-                        duration ? (current / duration) * 100 : 0
-                      }%`,
-                    } as React.CSSProperties
-                  }
-                  aria-label="Seek"
-                />
-                <span>{formatTime(duration)}</span>
-              </div>
+
+              {separating && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-3">
+                  <Loader2 size={14} className="animate-spin" />
+                  Processing on GPU…
+                </div>
+              )}
+
+              {error && (
+                <div className="flex items-start gap-2 text-sm text-destructive mb-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {hasStems && (
+                <div className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
+                  <span>{formatTime(current)}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 0}
+                    step={0.01}
+                    value={current}
+                    onChange={onScrub}
+                    className="stem-slider flex-1"
+                    style={
+                      {
+                        ["--stem-color" as string]: "var(--primary)",
+                        ["--stem-fill" as string]: `${
+                          duration ? (current / duration) * 100 : 0
+                        }%`,
+                      } as React.CSSProperties
+                    }
+                    aria-label="Seek"
+                  />
+                  <span>{formatTime(duration)}</span>
+                </div>
+              )}
             </div>
 
-            <StemTrack
-              label="Vocals"
-              icon={<Mic2 size={18} />}
-              colorVar="--vocals"
-              url={fileUrl}
-              volume={vocalsVol}
-              onVolume={setVocalsVol}
-              playing={playing}
-              seekTo={seek}
-              isLeader
-              onReady={(d) => setDuration(d)}
-              onProgress={(t) => setCurrent(t)}
-            />
-            <StemTrack
-              label="Instrumentals"
-              icon={<Music2 size={18} />}
-              colorVar="--instrumentals"
-              url={fileUrl}
-              volume={instrVol}
-              onVolume={setInstrVol}
-              playing={playing}
-              seekTo={seek}
-            />
+            {hasStems && (
+              <>
+                <StemTrack
+                  label="Vocals"
+                  icon={<Mic2 size={18} />}
+                  colorVar="--vocals"
+                  url={vocalsUrl!}
+                  volume={vocalsVol}
+                  onVolume={setVocalsVol}
+                  playing={playing}
+                  seekTo={seek}
+                  isLeader
+                  onReady={(d) => setDuration(d)}
+                  onProgress={(t) => setCurrent(t)}
+                />
+                <StemTrack
+                  label="Instrumentals"
+                  icon={<Music2 size={18} />}
+                  colorVar="--instrumentals"
+                  url={instrumentalUrl!}
+                  volume={instrVol}
+                  onVolume={setInstrVol}
+                  playing={playing}
+                  seekTo={seek}
+                />
 
-            <p className="text-center text-xs text-muted-foreground pt-2">
-              Tip: pull a slider to 0 to solo the other stem.
-            </p>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <a
+                    href={vocalsUrl!}
+                    download={`${fileName.replace(/\.[^/.]+$/, "")}-vocals.mp3`}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
+                  >
+                    Download vocals
+                  </a>
+                  <a
+                    href={instrumentalUrl!}
+                    download={`${fileName.replace(/\.[^/.]+$/, "")}-instrumental.mp3`}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-white/20 transition-colors"
+                  >
+                    Download instrumental
+                  </a>
+                </div>
+
+                <p className="text-center text-xs text-muted-foreground pt-2">
+                  Tip: pull a slider to 0 to solo the other stem.
+                </p>
+              </>
+            )}
           </div>
         )}
       </div>
