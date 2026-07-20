@@ -20,9 +20,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-// Paste your live Colab / Space Gradio URL here.
-// e.g. "https://12acae18d28239bfc3.gradio.live"
-const GRADIO_ENDPOINT = "https://YOUR_TEMPORARY_HASH.gradio.live";
+const GRADIO_ENDPOINT = "https://12acae18d28239bfc3.gradio.live";
 
 function formatTime(sec: number) {
   if (!isFinite(sec) || sec < 0) sec = 0;
