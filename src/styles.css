@@ -146,3 +146,50 @@
     color: var(--color-foreground);
   }
 }
+
+html, body {
+  color-scheme: dark;
+}
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom range slider used for both stem volumes and the seek bar */
+.stem-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--stem-color, var(--primary)) 0%,
+    var(--stem-color, var(--primary)) var(--stem-fill, 0%),
+    oklch(1 0 0 / 0.1) var(--stem-fill, 0%),
+    oklch(1 0 0 / 0.1) 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+.stem-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--stem-color, var(--primary));
+  box-shadow: 0 0 0 4px oklch(from var(--stem-color, var(--primary)) l c h / 0.15);
+  transition: transform 0.15s ease;
+}
+.stem-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.stem-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--stem-color, var(--primary));
+  box-shadow: 0 0 0 4px oklch(from var(--stem-color, var(--primary)) l c h / 0.15);
+}
