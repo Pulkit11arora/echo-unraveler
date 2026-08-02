@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
-import { Client } from "@gradio/client";
 import {
   UploadCloud,
   Play,
@@ -20,7 +19,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const GRADIO_ENDPOINT = import.meta.env.VITE_GRADIO_ENDPOINT as
+const SEPARATE_ENDPOINT = import.meta.env.VITE_SEPARATE_ENDPOINT as
   | string
   | undefined;
 
@@ -31,52 +30,41 @@ function formatTime(sec: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// Calls the Gradio `separate` endpoint with the uploaded file and
+function base64ToBlobUrl(b64: string, mimeType: string): string {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: mimeType });
+  return URL.createObjectURL(blob);
+}
+
+// Calls the Modal `separate` endpoint with the uploaded file and
 // returns object URLs for the vocals and instrumental MP3 blobs.
 async function separateAudio(
   file: File
 ): Promise<{ vocalsUrl: string; instrumentalUrl: string }> {
-  if (!GRADIO_ENDPOINT) {
+  if (!SEPARATE_ENDPOINT) {
     throw new Error(
-      "No separation backend configured. Set VITE_GRADIO_ENDPOINT in your .env file."
+      "No separation backend configured. Set VITE_SEPARATE_ENDPOINT in your .env file."
     );
   }
-  const endpoint = GRADIO_ENDPOINT;
 
-  const client = await Client.connect(endpoint);
+  const formData = new FormData();
+  formData.append("audio_file", file);
 
-  const result = await client.predict("/separate", {
-    audio_file: file,
+  const res = await fetch(SEPARATE_ENDPOINT, {
+    method: "POST",
+    body: formData,
   });
+  if (!res.ok) {
+    throw new Error(`Separation request failed (${res.status})`);
+  }
 
-  // result.data is an array matching the Gradio outputs:
-  // [vocals_file, instrumental_file]
-  const [vocalsData, instrumentalData] = result.data as any[];
-
-  const toUrl = async (entry: any): Promise<string> => {
-    // Gradio File outputs typically resolve to an object with a `url`
-    // (hosted on the Space/Colab tunnel) or a `path`. Fetch it and
-    // convert to a local blob URL so WaveSurfer can play it directly.
-    const remoteUrl: string | undefined = entry?.url ?? entry?.path;
-    if (!remoteUrl) {
-      throw new Error("Unexpected response shape from separation endpoint.");
-    }
-    const resolvedUrl = remoteUrl.startsWith("http")
-      ? remoteUrl
-      : `${endpoint.replace(/\/$/, "")}/file=${remoteUrl}`;
-
-    const res = await fetch(resolvedUrl);
-    if (!res.ok) {
-      throw new Error(`Failed to download separated stem (${res.status})`);
-    }
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
+  const { vocals_b64, instrumental_b64 } = (await res.json()) as {
+    vocals_b64: string;
+    instrumental_b64: string;
   };
 
-  const [vocalsUrl, instrumentalUrl] = await Promise.all([
-    toUrl(vocalsData),
-    toUrl(instrumentalData),
-  ]);
+  const vocalsUrl = base64ToBlobUrl(vocals_b64, "audio/mpeg");
+  const instrumentalUrl = base64ToBlobUrl(instrumental_b64, "audio/mpeg");
 
   return { vocalsUrl, instrumentalUrl };
 }

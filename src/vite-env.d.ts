@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_GRADIO_ENDPOINT?: string;
+  readonly VITE_SEPARATE_ENDPOINT?: string;
 }
 
 interface ImportMeta {
