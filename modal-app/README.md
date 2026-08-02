@@ -5,7 +5,7 @@ Serverless Demucs separation, deployed on Modal (scale-to-zero, no idle cost).
 ## Setup
 
 ```bash
-pip install modal
+pip install modal fastapi
 modal setup          # authenticate, one-time
 ```
 

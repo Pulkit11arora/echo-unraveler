@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 
 import modal
+from fastapi import Request
 
 app = modal.App("echo-unraveler-separator")
 
@@ -88,7 +89,7 @@ def separate(audio_bytes: bytes, filename: str) -> dict:
 
 @app.function(image=image, timeout=300)
 @modal.fastapi_endpoint(method="POST")
-async def separate_endpoint(request):
+async def separate_endpoint(request: Request):
     import base64
     from fastapi.responses import JSONResponse
 

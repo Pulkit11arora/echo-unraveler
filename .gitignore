@@ -16,6 +16,7 @@ dist-ssr
 .nitro
 *.local
 .env
+__pycache__/
 
 # Wrangler / Cloudflare
 .wrangler/
