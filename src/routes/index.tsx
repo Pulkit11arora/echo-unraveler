@@ -20,7 +20,9 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const GRADIO_ENDPOINT = "https://12acae18d28239bfc3.gradio.live";
+const GRADIO_ENDPOINT = import.meta.env.VITE_GRADIO_ENDPOINT as
+  | string
+  | undefined;
 
 function formatTime(sec: number) {
   if (!isFinite(sec) || sec < 0) sec = 0;
@@ -34,7 +36,14 @@ function formatTime(sec: number) {
 async function separateAudio(
   file: File
 ): Promise<{ vocalsUrl: string; instrumentalUrl: string }> {
-  const client = await Client.connect(GRADIO_ENDPOINT);
+  if (!GRADIO_ENDPOINT) {
+    throw new Error(
+      "No separation backend configured. Set VITE_GRADIO_ENDPOINT in your .env file."
+    );
+  }
+  const endpoint = GRADIO_ENDPOINT;
+
+  const client = await Client.connect(endpoint);
 
   const result = await client.predict("/separate", {
     audio_file: file,
@@ -54,7 +63,7 @@ async function separateAudio(
     }
     const resolvedUrl = remoteUrl.startsWith("http")
       ? remoteUrl
-      : `${GRADIO_ENDPOINT.replace(/\/$/, "")}/file=${remoteUrl}`;
+      : `${endpoint.replace(/\/$/, "")}/file=${remoteUrl}`;
 
     const res = await fetch(resolvedUrl);
     if (!res.ok) {
